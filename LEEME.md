@@ -2,7 +2,7 @@
 
 Aplicación web independiente. No necesita Claude, cuentas ni servidor propio: son archivos estáticos que cualquier hosting gratuito sirve. Una vez abierta en el teléfono, se instala en la pantalla de inicio y funciona sin conexión.
 
-Versión: 2026.10.29-1
+Versión: 2026.10.29-2 (motor de mapa Leaflet sobre canvas 2D: funciona en equipos sin WebGL, incluido el Modo de aislamiento del iPhone)
 
 ## Contenido
 
@@ -10,7 +10,7 @@ Versión: 2026.10.29-1
 |---|---|
 | `index.html` | La aplicación |
 | `data/` | Cartografía (5,004 secciones), resultados de 5 elecciones (PREP) y lista nominal al 15-oct-2026 |
-| `vendor/`, `fonts/`, `icons/` | Mapa, tipografías e íconos, todo local |
+| `vendor/`, `fonts/`, `icons/` | Motor de mapa (Leaflet), tipografías e íconos, todo local |
 | `sw.js`, `manifest.webmanifest` | Instalación en el teléfono y funcionamiento sin conexión |
 | `herramientas/` | Scripts de Python para regenerar `data/` con bases nuevas |
 

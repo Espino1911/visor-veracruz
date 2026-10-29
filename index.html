@@ -11,6 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Visor VER">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="stylesheet" href="vendor/leaflet.css">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="48x48" href="icons/favicon-48.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
@@ -74,7 +75,7 @@ header.bar{z-index:5;background:var(--surface);border-bottom:1px solid var(--lin
   background-position:calc(100% - 13px) 55%,calc(100% - 8px) 55%;background-size:5px 5px;background-repeat:no-repeat}
 
 .stage{position:relative;min-height:0;display:grid;grid-template-columns:1fr}
-#map{position:absolute;inset:0;background:var(--map-bg)}
+#map{position:absolute;inset:0;background:var(--map-bg);z-index:0;isolation:isolate}
 .legend{position:absolute;left:max(12px,env(safe-area-inset-left,0px));top:12px;z-index:3;background:var(--surface);border:1px solid var(--line);
   border-radius:var(--r);padding:8px 10px;box-shadow:var(--shadow);max-width:min(260px,60vw);font-size:12.5px}
 .legend b{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;font-weight:600}
@@ -149,12 +150,8 @@ tbody tr{cursor:pointer} tbody tr:hover{background:var(--surface-2)}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);
   padding:8px 14px;border-radius:8px;z-index:20;font-size:13.5px}
 /* MapLibre: estilos mínimos necesarios */
-.maplibregl-map{overflow:hidden;position:relative;-webkit-tap-highlight-color:transparent}
-.maplibregl-canvas{position:absolute;left:0;top:0}
-.maplibregl-canvas-container.maplibregl-interactive{cursor:grab}
-.maplibregl-ctrl-top-right{position:absolute;top:0;right:0;z-index:2}
-.maplibregl-ctrl-bottom-right,.maplibregl-ctrl-bottom-left,.maplibregl-ctrl-top-left{position:absolute;z-index:2}
-.maplibregl-ctrl-attrib{display:none}
+.leaflet-container{background:var(--map-bg);font:inherit;-webkit-tap-highlight-color:transparent;outline:0}
+.leaflet-interactive{cursor:pointer}
 .zoomctl{position:absolute;z-index:3;display:flex;flex-direction:column;gap:6px;right:max(12px,env(safe-area-inset-right,0px));top:12px}
 @media (min-width:900px){.zoomctl{right:450px}}
 .zoomctl button{width:36px;height:36px;border-radius:8px;border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow);font-size:18px;cursor:pointer}
@@ -202,7 +199,7 @@ tbody tr{cursor:pointer} tbody tr:hover{background:var(--surface-2)}
   </div>
 </div>
 
-<script src="vendor/maplibre-gl.js"></script>
+<script src="vendor/leaflet.js"></script>
 <script src="vendor/topojson-client.min.js"></script>
 <script>
 (() => {
@@ -318,14 +315,61 @@ function colorFor(c, i, extra) {
 }
 let extra_max = 1;
 
-// ---------- Mapa ----------
+// ---------- Mapa (Leaflet sobre canvas 2D: funciona sin WebGL) ----------
+const VER_BOX = [-98.7, 17.1, -93.6, 22.5];
+const MAP = {
+  layers: [], sel: null, distL: {}, munL: null, edoL: null, renderer: null, strokeOn: null,
+  init(sec, lines) {
+    this.renderer = L.canvas({padding: 0.4, tolerance: 2});
+    map = L.map('map', {zoomControl: false, attributionControl: false, renderer: this.renderer, preferCanvas: true,
+      zoomSnap: 0.25, zoomDelta: 0.5, wheelPxPerZoomLevel: 90, minZoom: 6, maxZoom: 17, inertia: true, boxZoom: false});
+    const none = cssVar('--map-none'), edge = cssVar('--map-edge');
+    L.geoJSON(sec, {renderer: this.renderer, style: () => ({stroke: false, color: edge, weight: 0.6, fillColor: none, fillOpacity: 0.95}),
+      onEachFeature: (ft, layer) => { this.layers[ft.id] = layer; layer.on('click', () => selectSec(ft.id, false)); }}).addTo(map);
+    const byTag = t => ({type: 'FeatureCollection', features: lines.features.filter(f => f.properties.layer === t)});
+    this.munL = L.geoJSON(byTag('mun'), {renderer: this.renderer, interactive: false, style: {color: cssVar('--fg'), weight: 0.7, opacity: 0.35}}).addTo(map);
+    ['df', 'dl'].forEach(t => this.distL[t] = L.geoJSON(byTag(t), {renderer: this.renderer, interactive: false, style: {color: cssVar('--fg'), weight: 1.8, opacity: 0.75}}));
+    this.edoL = L.geoJSON(byTag('edo'), {renderer: this.renderer, interactive: false, style: {color: cssVar('--muted'), weight: 1}}).addTo(map);
+    map.on('zoomend', () => this.strokes());
+    this.fit(VER_BOX, null, false);
+    this.strokes();
+  },
+  // Con zoom bajo, el borde se pinta del mismo color que el relleno para cerrar las juntas entre polígonos.
+  edgeStyle(l) {
+    const o = l.options;
+    return this.strokeOn ? {stroke: true, color: cssVar('--map-edge'), weight: map.getZoom() >= 12 ? 0.9 : 0.5, opacity: 0.8}
+                         : {stroke: true, color: o.fillColor, weight: 0.8, opacity: o.fillOpacity};
+  },
+  strokes() {
+    const on = map.getZoom() >= 9.5;
+    if (on === this.strokeOn) return; this.strokeOn = on;
+    this.layers.forEach(l => l && l.setStyle(this.edgeStyle(l)));
+  },
+  fill(i, col, inside) { const l = this.layers[i]; if (!l) return; l.setStyle({fillColor: col, fillOpacity: inside ? 0.95 : 0.18}); l.setStyle(this.edgeStyle(l)); },
+  dist(tag) {
+    Object.entries(this.distL).forEach(([t, g]) => { if (t === tag) { if (!map.hasLayer(g)) g.addTo(map); g.bringToFront(); } else if (map.hasLayer(g)) map.removeLayer(g); });
+    this.edoL.bringToFront(); if (this.sel) this.sel.bringToFront();
+  },
+  select(group) {
+    if (this.sel) map.removeLayer(this.sel);
+    const fc = {type: 'FeatureCollection', features: group.map(i => this.layers[i] && this.layers[i].feature).filter(Boolean)};
+    this.sel = L.geoJSON(fc, {renderer: this.renderer, interactive: false, style: {color: cssVar('--accent'), weight: 3, fill: false}}).addTo(map);
+  },
+  fit(b, maxZoom, animate = true) {
+    const p = padding();
+    map.fitBounds([[b[1], b[0]], [b[3], b[2]]], {paddingTopLeft: [p.left, p.top], paddingBottomRight: [p.right, p.bottom], maxZoom: maxZoom || 17, animate});
+  },
+  theme() {
+    const fg = cssVar('--fg');
+    this.munL.setStyle({color: fg}); Object.values(this.distL).forEach(g => g.setStyle({color: fg}));
+    this.edoL.setStyle({color: cssVar('--muted')});
+    this.layers.forEach(l => l && l.setStyle(this.edgeStyle(l)));
+    if (this.sel) this.sel.setStyle({color: cssVar('--accent')});
+  }
+};
 function themeMapPaint() {
   if (!ready) return;
-  map.setPaintProperty('bg', 'background-color', cssVar('--map-bg'));
-  map.setPaintProperty('sec-line', 'line-color', cssVar('--map-edge'));
-  map.setPaintProperty('mun-line', 'line-color', cssVar('--fg'));
-  map.setPaintProperty('dist-line', 'line-color', cssVar('--fg'));
-  map.setPaintProperty('sel-line', 'line-color', cssVar('--accent'));
+  MAP.theme();
   paint();
 }
 function paint() {
@@ -339,18 +383,16 @@ function paint() {
     const d = dataIdx(i), c = secCalc(e, d, S.fuerza);
     const ex = S.capa === 'pri' ? priMap.get(d) : S.capa === 'swing' ? swMap.get(d) : null;
     const col = colorFor(c, d, ex) || none;
-    map.setFeatureState({source: 'sec', id: i}, {c: col, in: inAmb(i)});
+    MAP.fill(i, col, inAmb(i));
   }
-  const dl = S.tipo === 'dl' ? 'dl' : S.tipo === 'mun' ? 'mun' : 'df';
-  map.setLayoutProperty('dist-line', 'visibility', S.tipo === 'mun' ? 'none' : 'visible');
-  map.setFilter('dist-line', ['==', ['get', 'layer'], dl]);
+  MAP.dist(S.tipo === 'dl' ? 'dl' : S.tipo === 'mun' ? null : 'df');
   legend(A);
 }
 function fitAmb() {
   if (!ready) return;
   let b = null;
   for (let i = 0; i < CAT.nGeo; i++) if (inAmb(i)) { const bb = CAT.bbox[i]; if (!bb) continue; b = b ? [Math.min(b[0], bb[0]), Math.min(b[1], bb[1]), Math.max(b[2], bb[2]), Math.max(b[3], bb[3])] : bb.slice(); }
-  if (b) map.fitBounds([[b[0], b[1]], [b[2], b[3]]], {padding: padding(), duration: 600});
+  if (b) MAP.fit(b);
 }
 function padding() {
   const wide = innerWidth >= 900, p = $('#panel');
@@ -551,10 +593,10 @@ function selectSec(gi, fly) {
   S.sel = gi; S.tab = 'sec';
   const d = dataIdx(gi);
   const group = d !== gi ? CAT.virtual[CAT.sec[d]].map(s => CAT.idx[s]) : [gi];
-  map.setFilter('sel-line', ['in', ['id'], ['literal', group]]);
+  MAP.select(group);
   if (fly) {
     let b = null; group.forEach(i => { const bb = CAT.bbox[i]; b = b ? [Math.min(b[0], bb[0]), Math.min(b[1], bb[1]), Math.max(b[2], bb[2]), Math.max(b[3], bb[3])] : bb.slice(); });
-    map.fitBounds([[b[0], b[1]], [b[2], b[3]]], {padding: padding(), maxZoom: 14, duration: 600});
+    MAP.fit(b, 15);
   }
   const p = $('#panel'); if (p.classList.contains('min')) setSheet('');
   render();
@@ -617,29 +659,9 @@ async function boot() {
   $('#selElec').value = S.elec;
   fillFuerzas(); fillComp();
 
-  map = new maplibregl.Map({
-    container: 'map', attributionControl: false, dragRotate: false, pitchWithRotate: false, touchPitch: false,
-    style: {version: 8, sources: {}, layers: [{id: 'bg', type: 'background', paint: {'background-color': cssVar('--map-bg')}}]},
-    bounds: [[-98.7, 17.1], [-93.6, 22.5]], fitBoundsOptions: {padding: padding()}
-  });
-  map.touchZoomRotate.disableRotation();
-  map.on('load', () => {
-    map.addSource('sec', {type: 'geojson', data: sec});
-    map.addSource('lines', {type: 'geojson', data: lines});
-    map.addLayer({id: 'sec-fill', type: 'fill', source: 'sec', paint: {
-      'fill-color': ['coalesce', ['feature-state', 'c'], cssVar('--map-none')],
-      'fill-opacity': ['case', ['==', ['feature-state', 'in'], false], 0.18, 0.95]}});
-    map.addLayer({id: 'sec-line', type: 'line', source: 'sec', minzoom: 8.5, paint: {'line-color': cssVar('--map-edge'), 'line-width': ['interpolate', ['linear'], ['zoom'], 8.5, 0.2, 13, 0.9], 'line-opacity': 0.8}});
-    map.addLayer({id: 'mun-line', type: 'line', source: 'lines', filter: ['==', ['get', 'layer'], 'mun'], paint: {'line-color': cssVar('--fg'), 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.3, 12, 1.1], 'line-opacity': 0.35}});
-    map.addLayer({id: 'dist-line', type: 'line', source: 'lines', filter: ['==', ['get', 'layer'], 'df'], paint: {'line-color': cssVar('--fg'), 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 1.1, 12, 2.6], 'line-opacity': 0.75}});
-    map.addLayer({id: 'edo-line', type: 'line', source: 'lines', filter: ['==', ['get', 'layer'], 'edo'], paint: {'line-color': cssVar('--muted'), 'line-width': 1}});
-    map.addLayer({id: 'sel-line', type: 'line', source: 'sec', filter: ['in', ['id'], ['literal', []]], paint: {'line-color': cssVar('--accent'), 'line-width': 3}});
-    ready = true; $('#loading').hidden = true;
-    paint(); render();
-    map.on('click', 'sec-fill', ev => { const f = ev.features[0]; if (f) selectSec(f.id, false); });
-    map.on('mouseenter', 'sec-fill', () => map.getCanvas().style.cursor = 'pointer');
-    map.on('mouseleave', 'sec-fill', () => map.getCanvas().style.cursor = '');
-  });
+  MAP.init(sec, lines);
+  ready = true; $('#loading').hidden = true;
+  paint(); render();
   render();
 }
 
@@ -652,7 +674,7 @@ $('#selCapa').onchange = e => { S.capa = e.target.value; $('#fComp').hidden = S.
 $('#selComp').onchange = e => { S.comp = e.target.value; paint(); };
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; if ($('#panel').classList.contains('min')) setSheet(''); render(); });
 $('#grab').onclick = () => { const p = $('#panel'); setSheet(p.classList.contains('min') ? '' : p.classList.contains('max') ? 'min' : 'max'); };
-$('#zin').onclick = () => map && map.zoomIn(); $('#zout').onclick = () => map && map.zoomOut(); $('#zfit').onclick = () => S.tipo === 'est' ? map.fitBounds([[-98.7, 17.1], [-93.6, 22.5]], {padding: padding()}) : fitAmb();
+$('#zin').onclick = () => map && map.zoomIn(); $('#zout').onclick = () => map && map.zoomOut(); $('#zfit').onclick = () => S.tipo === 'est' ? MAP.fit(VER_BOX) : fitAmb();
 $('#searchForm').onsubmit = e => {
   e.preventDefault(); const n = parseInt($('#q').value, 10);
   if (!CAT || isNaN(n)) return;
@@ -665,7 +687,7 @@ new MutationObserver(themeMapPaint).observe(document.documentElement, {attribute
 boot().catch(err => { $('#loading').textContent = navigator.onLine ? 'No se pudieron cargar los datos (' + err.message + '). Recarga la página.' : 'Sin conexión. Abre la app una vez con internet para guardarla en el teléfono.'; });
 
 // ---------- App instalable y sin conexión ----------
-const APP_VERSION = '2026.10.29-1';
+const APP_VERSION = '2026.10.29-2';
 const offBadge = document.createElement('div'); offBadge.className = 'offline'; offBadge.textContent = 'Sin conexión · datos guardados'; offBadge.hidden = navigator.onLine; offBadge.textContent = 'Sin conexión'; $('.brand').insertBefore(offBadge, $('#searchForm'));
 addEventListener('online', () => offBadge.hidden = true); addEventListener('offline', () => offBadge.hidden = false);
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
@@ -680,8 +702,9 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     reg.addEventListener('updatefound', () => { const w = reg.installing; w && w.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) ask(w); }); });
     setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
   }).catch(() => {});
-  let reloaded = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded) { reloaded = true; location.reload(); } });
+  // Recargar solo cuando una versión nueva reemplaza a otra (no en la primera instalación).
+  const hadController = !!navigator.serviceWorker.controller; let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
 }
 })();
 </script>

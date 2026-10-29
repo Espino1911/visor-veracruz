@@ -1,10 +1,10 @@
 // Visor Geoelectoral Veracruz: funcionamiento sin conexión.
 // Al publicar datos nuevos, cambia VERSION para que los teléfonos descarguen la actualización.
-const VERSION = '2026.10.29-1';
+const VERSION = '2026.10.29-2';
 const CACHE = 'visor-ver-' + VERSION;
 const ASSETS = [
   './', 'index.html', 'manifest.webmanifest',
-  'vendor/maplibre-gl.js', 'vendor/topojson-client.min.js',
+  'vendor/leaflet.js', 'vendor/leaflet.css', 'vendor/topojson-client.min.js',
   'data/geo.json', 'data/catalogo.json', 'data/resultados.json', 'data/ln2026.json',
   'fonts/plex-cond-400.woff2', 'fonts/plex-cond-500.woff2', 'fonts/plex-cond-600.woff2', 'fonts/plex-cond-700.woff2',
   'fonts/plex-mono-400.woff2', 'fonts/plex-mono-500.woff2',
